@@ -9,7 +9,7 @@ use winit::{
 use glam::{Vec3, Mat4};
 
 // ---------------------------------------------------------
-// 1. WebGPU 깊이 보정 행렬 (OpenGL [-1,1] -> WebGPU [0,1])
+// 1. WebGPU 깊이 보정 행렬
 // ---------------------------------------------------------
 #[rustfmt::skip]
 pub const OPENGL_TO_WGPU_MATRIX: Mat4 = Mat4::from_cols_array(&[
@@ -20,7 +20,7 @@ pub const OPENGL_TO_WGPU_MATRIX: Mat4 = Mat4::from_cols_array(&[
 ]);
 
 // ---------------------------------------------------------
-// 2. 데이터 구조 및 생성 함수
+// 2. 데이터 구조
 // ---------------------------------------------------------
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -42,6 +42,52 @@ impl Vertex {
     }
 }
 
+// ---------------------------------------------------------
+// 3. 3면 그리드 생성 함수 (핵심 수정 부분)
+// ---------------------------------------------------------
+fn create_full_grid_data(size: f32, divisions: usize) -> (Vec<Vertex>, Vec<u16>) {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    let step = size / divisions as f32;
+    let start = -size / 2.0;
+    let end = size / 2.0;
+    let mut curr_idx = 0;
+    
+    let mut add_line = |p1: [f32; 3], p2: [f32; 3], color: [f32; 3]| {
+        vertices.push(Vertex { position: p1, color });
+        vertices.push(Vertex { position: p2, color });
+        indices.push(curr_idx);
+        indices.push(curr_idx + 1);
+        curr_idx += 2;
+    };
+
+    // 각 평면별로 다른 색상을 주어 구분감을 높임 (선택 사항)
+    let color_xz = [0.2, 0.2, 0.2]; // 바닥 (어두운 회색)
+    let color_xy = [0.15, 0.2, 0.15]; // 뒷벽 (약간 녹색빛)
+    let color_yz = [0.2, 0.15, 0.15]; // 옆벽 (약간 붉은빛)
+
+    for i in 0..=divisions {
+        let d = start + (i as f32) * step;
+
+        // 1. 바닥 그리드 (XZ 평면, y = start)
+        add_line([d, start, start], [d, start, end], color_xz);
+        add_line([start, start, d], [end, start, d], color_xz);
+
+        // 2. 뒷벽 그리드 (XY 평면, z = start)
+        add_line([d, start, start], [d, end, start], color_xy);
+        add_line([start, d, start], [end, d, start], color_xy);
+
+        // 3. 옆벽 그리드 (YZ 평면, x = start)
+        add_line([start, d, start], [start, d, end], color_yz);
+        add_line([start, start, d], [start, end, d], color_yz);
+    }
+
+    (vertices, indices)
+}
+
+// ---------------------------------------------------------
+// 4. 그래프 데이터 생성 (기존 유지)
+// ---------------------------------------------------------
 fn plot_wireframe(
     x_range: &[f32],
     z_range: &[f32],
@@ -94,32 +140,8 @@ fn plot_wireframe(
     (vertices, indices)
 }
 
-fn create_full_grid_data(size: f32, divisions: usize) -> (Vec<Vertex>, Vec<u16>) {
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
-    let step = size / divisions as f32;
-    let start = -size / 2.0;
-    let mut curr_idx = 0;
-    
-    let mut add_line = |p1: [f32; 3], p2: [f32; 3], color: [f32; 3]| {
-        vertices.push(Vertex { position: p1, color });
-        vertices.push(Vertex { position: p2, color });
-        indices.push(curr_idx);
-        indices.push(curr_idx + 1);
-        curr_idx += 2;
-    };
-
-    let gray = [0.3, 0.3, 0.3];
-    for i in 0..=divisions {
-        let d = start + (i as f32) * step;
-        add_line([d, start, start], [d, start, size/2.0], gray);
-        add_line([start, start, d], [size/2.0, start, d], gray);
-    }
-    (vertices, indices)
-}
-
 // ---------------------------------------------------------
-// 3. 앱 관리 클래스
+// 5. App 구조체 및 렌더링 로직 (기존 유지)
 // ---------------------------------------------------------
 struct GraphResource {
     v_buf: wgpu::Buffer,
@@ -233,7 +255,7 @@ impl<'a> App<'a> {
         Self {
             surface, device, queue, config, size, pipeline, camera_buffer, camera_bind_group, depth_texture_view,
             grid_resource: (gv_buf, gi_buf, gi.len() as u32), graph_resources,
-            yaw: -45.0f32.to_radians(), pitch: 20.0f32.to_radians(), camera_radius: 15.0,
+            yaw: -45.0f32.to_radians(), pitch: 20.0f32.to_radians(), camera_radius: 18.0,
             is_dragging: false, last_mouse_pos: None,
         }
     }
@@ -259,8 +281,6 @@ impl<'a> App<'a> {
 
     fn update(&mut self) {
         let aspect = self.size.width as f32 / self.size.height as f32;
-        
-        // [수정사항] perspective_rh 사용 + 보정 행렬 곱하기
         let proj = Mat4::perspective_rh(PI / 4.0, aspect, 0.1, 100.0);
         let eye = Vec3::new(
             self.camera_radius * self.pitch.cos() * self.yaw.cos(),
@@ -268,10 +288,7 @@ impl<'a> App<'a> {
             self.camera_radius * self.pitch.cos() * self.yaw.sin(),
         );
         let view = Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y);
-        
-        // 최종 행렬 = WebGPU보정 * 투영 * 뷰
         let view_proj = OPENGL_TO_WGPU_MATRIX * proj * view;
-        
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&view_proj.to_cols_array()));
     }
 
@@ -321,11 +338,11 @@ fn main() {
         z_range.push(-5.0 + t * 10.0);
     }
     let mut graphs = Vec::new();
-    graphs.push(plot_wireframe(&x_range, &z_range, |x, z| (x*x + z*z).sqrt().sin(), [0.2, 0.5, 1.0]));
-    graphs.push(plot_wireframe(&x_range, &z_range, |x, z| ((x*x + z*z).sqrt() + 2.0).cos() * 0.5, [1.0, 0.3, 0.3]));
+    graphs.push(plot_wireframe(&x_range, &z_range, |x, z| (x*x + z*z).sqrt().sin(), [0.2, 0.6, 1.0]));
+    graphs.push(plot_wireframe(&x_range, &z_range, |x, z| ((x*x + z*z).sqrt() + 2.0).cos() * 0.5, [1.0, 0.4, 0.4]));
 
     let event_loop = EventLoop::new().unwrap();
-    let window = Arc::new(WindowBuilder::new().with_title("WGPU 3D Plot").with_inner_size(winit::dpi::PhysicalSize::new(1200, 900)).build(&event_loop).unwrap());
+    let window = Arc::new(WindowBuilder::new().with_title("WGPU 3D Plot with Full Grid").with_inner_size(winit::dpi::PhysicalSize::new(1200, 900)).build(&event_loop).unwrap());
     let mut app = pollster::block_on(App::new(window.clone(), graphs));
 
     event_loop.run(move |event, elwt| {
@@ -348,15 +365,11 @@ fn main() {
                 }
                 WindowEvent::MouseWheel { delta, .. } => {
                     let dy = match delta { MouseScrollDelta::LineDelta(_, y) => *y, MouseScrollDelta::PixelDelta(p) => p.y as f32 * 0.01 };
-                    app.camera_radius = (app.camera_radius - dy).clamp(2.0, 40.0);
+                    app.camera_radius = (app.camera_radius - dy).clamp(2.0, 50.0);
                 }
                 WindowEvent::RedrawRequested => {
                     app.update();
-                    match app.render() {
-                        Ok(_) => {}
-                        Err(wgpu::SurfaceError::Lost) => app.resize(app.size),
-                        _ => elwt.exit(),
-                    }
+                    let _ = app.render();
                 }
                 _ => {}
             },
