@@ -1,12 +1,9 @@
 use std::f32::consts::PI;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
-use winit::{
-    window::Window,
-};
+use winit::window::Window;
 use glam::{Vec3, Mat4};
 
-// 1. 상수 및 정점 구조체 (pub 추가)
 #[rustfmt::skip]
 pub const OPENGL_TO_WGPU_MATRIX: Mat4 = Mat4::from_cols_array(&[
     1.0, 0.0, 0.0, 0.0,
@@ -35,11 +32,32 @@ impl Vertex {
     }
 }
 
-// 2. 데이터 생성 및 통합 함수 (pub 추가)
+// 빌더 패턴을 위한 데이터 구조체
+pub struct PlotData {
+    pub graphs: Vec<(Vec<Vertex>, Vec<u32>)>,
+    pub scatters: Vec<(Vec<Vertex>, Vec<u32>)>,
+}
+
+impl PlotData {
+    pub fn new() -> Self {
+        Self { graphs: vec![], scatters: vec![] }
+    }
+
+    pub fn add_graph(mut self, data: (Vec<Vertex>, Vec<u32>)) -> Self {
+        self.graphs.push(data);
+        self
+    }
+
+    pub fn add_scatter(mut self, data: (Vec<Vertex>, Vec<u32>)) -> Self {
+        self.scatters.push(data);
+        self
+    }
+}
+
 pub fn merge_graphs_data(graphs: Vec<(Vec<Vertex>, Vec<u32>)>) -> (Vec<Vertex>, Vec<u32>) {
+    if graphs.is_empty() { return (vec![], vec![]); }
     let total_v: usize = graphs.iter().map(|g| g.0.len()).sum();
     let total_i: usize = graphs.iter().map(|g| g.1.len()).sum();
-
     let mut merged_vertices = Vec::with_capacity(total_v);
     let mut merged_indices = Vec::with_capacity(total_i);
 
@@ -56,8 +74,8 @@ pub fn merge_graphs_data(graphs: Vec<(Vec<Vertex>, Vec<u32>)>) -> (Vec<Vertex>, 
 pub fn create_full_grid_data(size: f32, divisions: usize) -> (Vec<Vertex>, Vec<u32>) {
     let step = size / divisions as f32;
     let start = -size / 2.0;
-    let mut vertices = Vec::with_capacity((divisions + 1) * 12);
-    let mut indices = Vec::with_capacity((divisions + 1) * 12);
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
     let mut curr_idx = 0;
 
     let mut add_line = |p1: [f32; 3], p2: [f32; 3], color: [f32; 3]| {
@@ -116,25 +134,36 @@ pub fn plot_wireframe(x_range: &[f32], z_range: &[f32], y_func: impl Fn(f32, f32
     (vertices, indices)
 }
 
-// 3. App 구조체 및 구현 (pub 추가)
+pub fn plot_scatter(points: &[(f32, f32, f32)], color: [f32; 3]) -> (Vec<Vertex>, Vec<u32>) {
+    let mut vertices = Vec::with_capacity(points.len());
+    let mut indices = Vec::with_capacity(points.len());
+    for (i, &(x, y, z)) in points.iter().enumerate() {
+        vertices.push(Vertex { position: [x, y, z, 1.0], color: [color[0], color[1], color[2], 1.0] });
+        indices.push(i as u32);
+    }
+    (vertices, indices)
+}
+
 pub struct App<'a> {
     pub surface: wgpu::Surface<'a>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub config: wgpu::SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
-    pipeline: wgpu::RenderPipeline,
+    line_pipeline: wgpu::RenderPipeline,
+    point_pipeline: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     pub depth_view: wgpu::TextureView,
     grid_res: (wgpu::Buffer, wgpu::Buffer, u32),
     graph_res: (wgpu::Buffer, wgpu::Buffer, u32),
+    scatter_res: (wgpu::Buffer, wgpu::Buffer, u32),
     pub yaw: f32, pub pitch: f32, pub radius: f32,
     pub is_dragging: bool, pub last_pos: Option<(f64, f64)>,
 }
 
 impl<'a> App<'a> {
-    pub async fn new(window: Arc<Window>, graphs: Vec<(Vec<Vertex>, Vec<u32>)>) -> Self {
+    pub async fn new(window: Arc<Window>, data: PlotData) -> Self {
         let size = window.inner_size();
         let instance = wgpu::Instance::default();
         let surface = instance.create_surface(window.clone()).unwrap();
@@ -173,13 +202,23 @@ impl<'a> App<'a> {
             "#)),
         });
 
-        let (merged_v, merged_i) = merge_graphs_data(graphs);
-        let graph_v_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&merged_v), usage: wgpu::BufferUsages::VERTEX });
-        let graph_i_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&merged_i), usage: wgpu::BufferUsages::INDEX });
+        // 데이터가 비어있을 때 패닉을 방지하기 위한 유틸리티 함수
+        let create_safe_buffer = |device: &wgpu::Device, data: &[u8], usage: wgpu::BufferUsages| {
+            let contents = if data.is_empty() { &[0u8; 4] } else { data };
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents, usage })
+        };
 
         let (gv, gi) = create_full_grid_data(10.0, 10);
-        let gv_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&gv), usage: wgpu::BufferUsages::VERTEX });
-        let gi_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&gi), usage: wgpu::BufferUsages::INDEX });
+        let grid_v_buf = create_safe_buffer(&device, bytemuck::cast_slice(&gv), wgpu::BufferUsages::VERTEX);
+        let grid_i_buf = create_safe_buffer(&device, bytemuck::cast_slice(&gi), wgpu::BufferUsages::INDEX);
+
+        let (mv, mi) = merge_graphs_data(data.graphs);
+        let graph_v_buf = create_safe_buffer(&device, bytemuck::cast_slice(&mv), wgpu::BufferUsages::VERTEX);
+        let graph_i_buf = create_safe_buffer(&device, bytemuck::cast_slice(&mi), wgpu::BufferUsages::INDEX);
+
+        let (sv, si) = merge_graphs_data(data.scatters);
+        let scatter_v_buf = create_safe_buffer(&device, bytemuck::cast_slice(&sv), wgpu::BufferUsages::VERTEX);
+        let scatter_i_buf = create_safe_buffer(&device, bytemuck::cast_slice(&si), wgpu::BufferUsages::INDEX);
 
         let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -187,8 +226,10 @@ impl<'a> App<'a> {
         });
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor { layout: &bgl, entries: &[wgpu::BindGroupEntry { binding: 0, resource: camera_buffer.as_entire_binding() }], label: None });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: None, layout: Some(&device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[&bgl], immediate_size: 0 })),
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[&bgl], immediate_size: 0 });
+
+        let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Line Pipeline"), layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_main"), buffers: &[Vertex::desc()], compilation_options: Default::default() },
             fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_main"), targets: &[Some(wgpu::ColorTargetState { format, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }),
             primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::LineList, ..Default::default() },
@@ -196,12 +237,23 @@ impl<'a> App<'a> {
             multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None,
         });
 
+        let point_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Point Pipeline"), layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState { module: &shader, entry_point: Some("vs_main"), buffers: &[Vertex::desc()], compilation_options: Default::default() },
+            fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_main"), targets: &[Some(wgpu::ColorTargetState { format, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })], compilation_options: Default::default() }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::PointList, ..Default::default() },
+            depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: true, depth_compare: wgpu::CompareFunction::Less, stencil: Default::default(), bias: Default::default() }),
+            multisample: wgpu::MultisampleState::default(), multiview_mask: None, cache: None,
+        });
+
         let depth_view = Self::create_depth_view(&device, size.width, size.height);
 
         Self {
-            surface, device, queue, config, size, pipeline, camera_buffer, camera_bind_group, depth_view,
-            grid_res: (gv_buf, gi_buf, gi.len() as u32),
-            graph_res: (graph_v_buf, graph_i_buf, merged_i.len() as u32),
+            surface, device, queue, config, size, line_pipeline, point_pipeline,
+            camera_buffer, camera_bind_group, depth_view,
+            grid_res: (grid_v_buf, grid_i_buf, gi.len() as u32),
+            graph_res: (graph_v_buf, graph_i_buf, mi.len() as u32),
+            scatter_res: (scatter_v_buf, scatter_i_buf, si.len() as u32),
             yaw: -45.0f32.to_radians(), pitch: 25.0f32.to_radians(), radius: 15.0,
             is_dragging: false, last_pos: None,
         }
@@ -229,20 +281,41 @@ impl<'a> App<'a> {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
             let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.01, g: 0.01, b: 0.02, a: 1.0 }), store: wgpu::StoreOp::Store }, depth_slice: None })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment { view: &self.depth_view, depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }), stencil_ops: None }),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view, resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.01, g: 0.01, b: 0.02, a: 1.0 }), store: wgpu::StoreOp::Store },
+                    depth_slice: None
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                }),
                 ..Default::default()
             });
-            rp.set_pipeline(&self.pipeline);
+            
             rp.set_bind_group(0, &self.camera_bind_group, &[]);
             
-            rp.set_vertex_buffer(0, self.grid_res.0.slice(..));
-            rp.set_index_buffer(self.grid_res.1.slice(..), wgpu::IndexFormat::Uint32);
-            rp.draw_indexed(0..self.grid_res.2, 0, 0..1);
-            
-            rp.set_vertex_buffer(0, self.graph_res.0.slice(..));
-            rp.set_index_buffer(self.graph_res.1.slice(..), wgpu::IndexFormat::Uint32);
-            rp.draw_indexed(0..self.graph_res.2, 0, 0..1);
+            // 1. Grid & Graphs (Line Pipeline)
+            rp.set_pipeline(&self.line_pipeline);
+            if self.grid_res.2 > 0 {
+                rp.set_vertex_buffer(0, self.grid_res.0.slice(..));
+                rp.set_index_buffer(self.grid_res.1.slice(..), wgpu::IndexFormat::Uint32);
+                rp.draw_indexed(0..self.grid_res.2, 0, 0..1);
+            }
+            if self.graph_res.2 > 0 {
+                rp.set_vertex_buffer(0, self.graph_res.0.slice(..));
+                rp.set_index_buffer(self.graph_res.1.slice(..), wgpu::IndexFormat::Uint32);
+                rp.draw_indexed(0..self.graph_res.2, 0, 0..1);
+            }
+
+            // 2. Scatters (Point Pipeline)
+            if self.scatter_res.2 > 0 {
+                rp.set_pipeline(&self.point_pipeline);
+                rp.set_vertex_buffer(0, self.scatter_res.0.slice(..));
+                rp.set_index_buffer(self.scatter_res.1.slice(..), wgpu::IndexFormat::Uint32);
+                rp.draw_indexed(0..self.scatter_res.2, 0, 0..1);
+            }
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
