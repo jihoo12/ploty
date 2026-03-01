@@ -278,7 +278,7 @@ fn main() {
     graphs.push(plot_wireframe(&range, &range, |x, z| (x*0.5).exp().cos() + z.sin(), [0.3, 1.0, 0.3]));
 
     let event_loop = EventLoop::new().unwrap();
-    let window = Arc::new(WindowBuilder::new().with_title("WGPU Batched Rendering").with_inner_size(winit::dpi::PhysicalSize::new(1000, 800)).build(&event_loop).unwrap());
+    let window = Arc::new(WindowBuilder::new().with_title("ploty").with_inner_size(winit::dpi::PhysicalSize::new(1000, 800)).build(&event_loop).unwrap());
     let mut app = pollster::block_on(App::new(window.clone(), graphs));
 
     event_loop.run(move |event, elwt| {
