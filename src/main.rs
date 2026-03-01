@@ -20,13 +20,13 @@ pub const OPENGL_TO_WGPU_MATRIX: Mat4 = Mat4::from_cols_array(&[
 ]);
 
 // ---------------------------------------------------------
-// 2. 데이터 구조
+// 2. 데이터 구조 (최적화됨: 32바이트 정렬 및 vec4 사용)
 // ---------------------------------------------------------
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
-    position: [f32; 3],
-    color: [f32; 3],
+    position: [f32; 4], // x, y, z, 1.0 (16바이트 정렬을 위해 4개 사용)
+    color: [f32; 4],    // r, g, b, a (GPU SIMD 처리에 최적화)
 }
 
 impl Vertex {
@@ -35,49 +35,48 @@ impl Vertex {
             array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
-                wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x3 },
-                wgpu::VertexAttribute { offset: 12, shader_location: 1, format: wgpu::VertexFormat::Float32x3 },
+                wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x4 },
+                wgpu::VertexAttribute { offset: 16, shader_location: 1, format: wgpu::VertexFormat::Float32x4 },
             ],
         }
     }
 }
 
 // ---------------------------------------------------------
-// 3. 3면 그리드 생성 함수 (핵심 수정 부분)
+// 3. 3면 그리드 생성 함수 (최적화됨: Vec::with_capacity & u32 통일)
 // ---------------------------------------------------------
-fn create_full_grid_data(size: f32, divisions: usize) -> (Vec<Vertex>, Vec<u16>) {
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
+fn create_full_grid_data(size: f32, divisions: usize) -> (Vec<Vertex>, Vec<u32>) {
+    let lines_per_plane = (divisions + 1) * 2;
+    let total_lines = lines_per_plane * 3;
+    let total_vertices = total_lines * 2;
+    
+    // 메모리 재할당 방지
+    let mut vertices = Vec::with_capacity(total_vertices);
+    let mut indices = Vec::with_capacity(total_vertices);
+    
     let step = size / divisions as f32;
     let start = -size / 2.0;
     let end = size / 2.0;
     let mut curr_idx = 0;
     
     let mut add_line = |p1: [f32; 3], p2: [f32; 3], color: [f32; 3]| {
-        vertices.push(Vertex { position: p1, color });
-        vertices.push(Vertex { position: p2, color });
+        vertices.push(Vertex { position: [p1[0], p1[1], p1[2], 1.0], color: [color[0], color[1], color[2], 1.0] });
+        vertices.push(Vertex { position: [p2[0], p2[1], p2[2], 1.0], color: [color[0], color[1], color[2], 1.0] });
         indices.push(curr_idx);
         indices.push(curr_idx + 1);
         curr_idx += 2;
     };
 
-    // 각 평면별로 다른 색상을 주어 구분감을 높임 (선택 사항)
-    let color_xz = [0.2, 0.2, 0.2]; // 바닥 (어두운 회색)
-    let color_xy = [0.15, 0.2, 0.15]; // 뒷벽 (약간 녹색빛)
-    let color_yz = [0.2, 0.15, 0.15]; // 옆벽 (약간 붉은빛)
+    let color_xz = [0.2, 0.2, 0.2];
+    let color_xy = [0.15, 0.2, 0.15];
+    let color_yz = [0.2, 0.15, 0.15];
 
     for i in 0..=divisions {
         let d = start + (i as f32) * step;
-
-        // 1. 바닥 그리드 (XZ 평면, y = start)
         add_line([d, start, start], [d, start, end], color_xz);
         add_line([start, start, d], [end, start, d], color_xz);
-
-        // 2. 뒷벽 그리드 (XY 평면, z = start)
         add_line([d, start, start], [d, end, start], color_xy);
         add_line([start, d, start], [end, d, start], color_xy);
-
-        // 3. 옆벽 그리드 (YZ 평면, x = start)
         add_line([start, d, start], [start, d, end], color_yz);
         add_line([start, start, d], [start, end, d], color_yz);
     }
@@ -86,7 +85,7 @@ fn create_full_grid_data(size: f32, divisions: usize) -> (Vec<Vertex>, Vec<u16>)
 }
 
 // ---------------------------------------------------------
-// 4. 그래프 데이터 생성 (기존 유지)
+// 4. 그래프 데이터 생성 (최적화됨: 단일 패스 할당 및 y_vals 배열 제거)
 // ---------------------------------------------------------
 fn plot_wireframe(
     x_range: &[f32],
@@ -96,35 +95,42 @@ fn plot_wireframe(
 ) -> (Vec<Vertex>, Vec<u32>) {
     let rows = z_range.len();
     let cols = x_range.len();
-    let mut vertices = Vec::new();
-    let mut y_vals = Vec::new();
+    let vertex_count = rows * cols;
+    
+    // 메모리 재할당 방지
+    let mut vertices = Vec::with_capacity(vertex_count);
     let (mut y_min, mut y_max) = (f32::MAX, f32::MIN);
 
+    // 1차 패스: 위치 계산 및 min/max 추출 (y_vals 벡터 할당 제거)
     for &z in z_range {
         for &x in x_range {
             let y = y_func(x, z);
-            y_vals.push(y);
             if y < y_min { y_min = y; }
             if y > y_max { y_max = y; }
+            vertices.push(Vertex {
+                position: [x, y, z, 1.0],
+                color: [0.0, 0.0, 0.0, 1.0], // 임시 색상
+            });
         }
     }
 
     let denom = if y_max != y_min { y_max - y_min } else { 1.0 };
 
-    for (i, &z) in z_range.iter().enumerate() {
-        for (j, &x) in x_range.iter().enumerate() {
-            let y = y_vals[i * cols + j];
-            let y_norm = (y - y_min) / denom;
-            let color = [
-                base_color[0] * (0.6 + 0.4 * y_norm),
-                base_color[1] * (0.6 + 0.4 * y_norm),
-                base_color[2] * (0.6 + 0.4 * y_norm),
-            ];
-            vertices.push(Vertex { position: [x, y, z], color });
-        }
+    // 2차 패스: 정규화된 Y값을 기반으로 색상 덮어쓰기
+    for v in &mut vertices {
+        let y_norm = (v.position[1] - y_min) / denom;
+        let intensity = 0.6 + 0.4 * y_norm;
+        v.color = [
+            base_color[0] * intensity,
+            base_color[1] * intensity,
+            base_color[2] * intensity,
+            1.0
+        ];
     }
 
-    let mut indices = Vec::new();
+    let index_count = (rows * (cols - 1) * 2) + ((rows - 1) * cols * 2);
+    let mut indices = Vec::with_capacity(index_count);
+    
     for r in 0..rows {
         for c in 0..(cols - 1) {
             indices.push((r * cols + c) as u32);
@@ -137,11 +143,12 @@ fn plot_wireframe(
             indices.push(((r + 1) * cols + c) as u32);
         }
     }
+    
     (vertices, indices)
 }
 
 // ---------------------------------------------------------
-// 5. App 구조체 및 렌더링 로직 (기존 유지)
+// 5. App 구조체 및 렌더링 로직
 // ---------------------------------------------------------
 struct GraphResource {
     v_buf: wgpu::Buffer,
@@ -192,26 +199,27 @@ impl<'a> App<'a> {
         };
         surface.configure(&device, &config);
 
+        // 셰이더 최적화: vec3 대신 vec4를 사용하여 메모리 접근 효율화
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(r#"
                 struct Camera { view_proj: mat4x4<f32> };
                 @group(0) @binding(0) var<uniform> camera: Camera;
-                struct VertexInput { @location(0) pos: vec3<f32>, @location(1) col: vec3<f32> };
-                struct VertexOutput { @builtin(position) clip_pos: vec4<f32>, @location(0) col: vec3<f32> };
+                struct VertexInput { @location(0) pos: vec4<f32>, @location(1) col: vec4<f32> };
+                struct VertexOutput { @builtin(position) clip_pos: vec4<f32>, @location(0) col: vec4<f32> };
                 @vertex fn vs_main(in: VertexInput) -> VertexOutput {
                     var out: VertexOutput;
-                    out.clip_pos = camera.view_proj * vec4<f32>(in.pos, 1.0);
+                    out.clip_pos = camera.view_proj * in.pos;
                     out.col = in.col;
                     return out;
                 }
                 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-                    return vec4<f32>(in.col, 1.0);
+                    return in.col;
                 }
             "#)),
         });
 
-        let mut graph_resources = Vec::new();
+        let mut graph_resources = Vec::with_capacity(graphs_data.len());
         for (v, i) in graphs_data {
             let v_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&v), usage: wgpu::BufferUsages::VERTEX });
             let i_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&i), usage: wgpu::BufferUsages::INDEX });
@@ -313,9 +321,12 @@ impl<'a> App<'a> {
             });
             rp.set_pipeline(&self.pipeline);
             rp.set_bind_group(0, &self.camera_bind_group, &[]);
+            
+            // 인덱스 포맷이 u32로 통일되어 상태 변경이 최소화됨
             rp.set_vertex_buffer(0, self.grid_resource.0.slice(..));
-            rp.set_index_buffer(self.grid_resource.1.slice(..), wgpu::IndexFormat::Uint16);
+            rp.set_index_buffer(self.grid_resource.1.slice(..), wgpu::IndexFormat::Uint32);
             rp.draw_indexed(0..self.grid_resource.2, 0, 0..1);
+            
             for graph in &self.graph_resources {
                 rp.set_vertex_buffer(0, graph.v_buf.slice(..));
                 rp.set_index_buffer(graph.i_buf.slice(..), wgpu::IndexFormat::Uint32);
@@ -330,19 +341,20 @@ impl<'a> App<'a> {
 
 fn main() {
     let n = 60;
-    let mut x_range = Vec::new();
-    let mut z_range = Vec::new();
+    let mut x_range = Vec::with_capacity(n);
+    let mut z_range = Vec::with_capacity(n);
     for i in 0..n {
         let t = i as f32 / (n - 1) as f32;
         x_range.push(-5.0 + t * 10.0);
         z_range.push(-5.0 + t * 10.0);
     }
-    let mut graphs = Vec::new();
+    
+    let mut graphs = Vec::with_capacity(2);
     graphs.push(plot_wireframe(&x_range, &z_range, |x, z| (x*x + z*z).sqrt().sin(), [0.2, 0.6, 1.0]));
     graphs.push(plot_wireframe(&x_range, &z_range, |x, z| ((x*x + z*z).sqrt() + 2.0).cos() * 0.5, [1.0, 0.4, 0.4]));
 
     let event_loop = EventLoop::new().unwrap();
-    let window = Arc::new(WindowBuilder::new().with_title("WGPU 3D Plot with Full Grid").with_inner_size(winit::dpi::PhysicalSize::new(1200, 900)).build(&event_loop).unwrap());
+    let window = Arc::new(WindowBuilder::new().with_title("WGPU 3D Plot - Optimized").with_inner_size(winit::dpi::PhysicalSize::new(1200, 900)).build(&event_loop).unwrap());
     let mut app = pollster::block_on(App::new(window.clone(), graphs));
 
     event_loop.run(move |event, elwt| {
