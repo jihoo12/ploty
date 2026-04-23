@@ -36,3 +36,5 @@ The engine uses a Vertex struct with a Float32x4 layout for both position and co
 ```bash
 cargo run --release
 ```
+
+<img src="image.png">
