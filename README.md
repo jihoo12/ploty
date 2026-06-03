@@ -1,40 +1,101 @@
-## Ploty: A Lightweight 3D Plotting Library
-Ploty is a hardware-accelerated 3D data visualization engine built with Rust and wgpu. It allows developers to render complex mathematical surfaces and scatter plots with high performance using a simple builder-style API.
+# Ploty — Lightweight 3D Plotting in Rust
 
-## 🚀 Features
-- Hardware Accelerated: Leverages wgpu for cross-platform, high-performance GPU rendering (Vulkan, Metal, DX12).
+A hardware-accelerated 3D data visualization engine built with Rust and [wgpu](https://wgpu.rs). Render mathematical surfaces, animated wave functions, and scatter plots with a clean builder-style API — no boilerplate required.
 
-- Surface Plotting: Easily generate 3D wireframe meshes from mathematical functions.
+<img src="plot.webm" alt="Ploty screenshot">
 
-- Scatter Plots: Render point cloud data efficiently using specialized point-list pipelines.
+---
 
-- Interactive Camera: Full 3D navigation (Orbit, Zoom, and Drag) using winit event handling.
+## Features
 
-- Builder Pattern API: Clean and modular data construction for adding multiple datasets to a single scene.
+- **Cross-platform GPU rendering** via wgpu (Vulkan, Metal, DirectX 12)
+- **Static surface plots** — wireframe meshes from any `f(x, z) → y` function
+- **Animated graphs** — time-varying surfaces driven by `f(x, z, t) → y` closures
+- **Scatter plots** — efficient point-cloud rendering via a dedicated point-list pipeline
+- **Orbit camera** — drag to rotate, scroll to zoom, fully interactive
+- **Legend overlay** — per-graph labels rendered with GPU-accelerated text (glyphon)
+- **Depth-correct compositing** — grid, surfaces, and points layer correctly in 3D
+- **Builder API** — chain `.add_graph()`, `.add_animated_graph()`, and `.with_config()` to build a scene in a few lines
 
-- Depth Testing: Proper 3D depth composition ensuring correct visual layering of grids, graphs, and points.
-## 📖 How It Works
+---
 
-- Data Structure
-<br>
-The engine uses a Vertex struct with a Float32x4 layout for both position and color, ensuring alignment compatibility with GPU buffers.
+## Quick Start
 
-## Controls
-- Left Click + Drag: Orbit/Rotate the camera (Yaw and Pitch).
-
-- Mouse Wheel: Zoom in and out (Adjusts camera radius).
-
-- Window Resize: Responsive viewport and depth-buffer scaling.
-
-## 🏗 Installation & Running
-- Ensure you have the Rust toolchain installed.
-
-- Clone this repository.
-
-- Run the project:
+Requires the [Rust toolchain](https://rustup.rs).
 
 ```bash
+git clone https://github.com/jihoo12/ploty
+cd ploty
 cargo run --release
 ```
 
-<img src="image.png">
+---
+
+## Usage
+
+```rust
+let range: Vec<f32> = (0..60)
+    .map(|i| -5.0 + (i as f32 / 59.0) * 10.0)
+    .collect();
+
+let config = PlotConfig {
+    grid_size: 12.0,
+    grid_divisions: 12,
+    legend: vec![
+        LegendEntry { label: "sin(r)".into(),  color: [0.2, 0.5, 1.0] },
+        LegendEntry { label: "wave".into(),     color: [1.0, 0.45, 0.15] },
+    ],
+    ..Default::default()
+};
+
+let plot_data = PlotData::new()
+    .with_config(config)
+    // Static surface: sin(r)
+    .add_graph(plot_wireframe(
+        &range, &range,
+        |x, z| (x * x + z * z).sqrt().sin(),
+        [0.2, 0.5, 1.0],
+    ))
+    // Animated surface: outward ripple
+    .add_animated_graph(
+        range.clone(), range.clone(),
+        |x, z, t| {
+            let r = (x * x + z * z).sqrt();
+            (r - t * 2.5).sin() * (-r * 0.15).exp()
+        },
+        [1.0, 0.45, 0.15],
+    );
+```
+
+---
+
+## Camera Controls
+
+| Input | Action |
+|---|---|
+| Left click + drag | Orbit (yaw & pitch) |
+| Scroll wheel | Zoom in / out |
+| Window resize | Viewport and depth buffer update automatically |
+
+---
+
+## Architecture
+
+| File | Responsibility |
+|---|---|
+| `main.rs` | winit event loop, input routing |
+| `renderer.rs` | wgpu device, pipelines, render loop |
+| `camera.rs` | Spherical-coordinate orbit camera |
+| `geometry.rs` | Mesh generation: grid, wireframe, scatter |
+| `mesh.rs` | CPU-side vertex/index storage and merging |
+| `data.rs` | `PlotData` builder, animated graph definitions |
+| `config.rs` | `PlotConfig` and `LegendEntry` |
+| `vertex.rs` | GPU vertex layout (`Float32x4` position + color) |
+
+Vertices use a `[f32; 4]` layout for both position and color, matching wgpu buffer alignment requirements directly.
+
+---
+
+## License
+
+Apache-2.0 license
