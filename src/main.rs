@@ -32,7 +32,9 @@ impl ApplicationHandler for Handler {
                 )
                 .unwrap(),
         );
-        let app = pollster::block_on(plot::App::new(window.clone(), self.plot_data.take().unwrap()));
+        let app = pollster::block_on(
+            plot::App::new(window.clone(), self.plot_data.take().unwrap()),
+        );
         self.state = Some(State { window, app });
     }
 
@@ -46,11 +48,9 @@ impl ApplicationHandler for Handler {
         let app = &mut state.app;
 
         match event {
-            // ① resize: 이전의 4줄 → 1줄
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => app.resize(size),
 
-            // ② camera: 직접 필드 수정 → 메서드 위임
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
                 app.camera.on_mouse_button(state == ElementState::Pressed);
             }
@@ -81,21 +81,42 @@ fn main() {
         .map(|i| -5.0 + (i as f32 / (n - 1) as f32) * 10.0)
         .collect();
 
-    // ③ PlotConfig: 격자 설정을 코드에서 제어 가능
     let config = plot::PlotConfig {
         grid_size: 12.0,
         grid_divisions: 12,
+        // 각 그래프에 대응하는 범례 항목
+        legend: vec![
+            plot::LegendEntry {
+                label: "sin(r)  — 정적".into(),
+                color: [0.2, 0.5, 1.0],
+            },
+            plot::LegendEntry {
+                label: "파동  — 애니메이션".into(),
+                color: [1.0, 0.45, 0.15],
+            },
+        ],
         ..Default::default()
     };
 
     let plot_data = plot::PlotData::new()
         .with_config(config)
+        // 정적 그래프: sin(r)
         .add_graph(plot::plot_wireframe(
             &range,
             &range,
             |x, z| (x * x + z * z).sqrt().sin(),
             [0.2, 0.5, 1.0],
-        ));
+        ))
+        // 애니메이션 그래프: 바깥으로 퍼지는 파동
+        .add_animated_graph(
+            range.clone(),
+            range.clone(),
+            |x, z, t| {
+                let r = (x * x + z * z).sqrt();
+                (r - t * 2.5).sin() * (-r * 0.15).exp()
+            },
+            [1.0, 0.45, 0.15],
+        );
 
     let event_loop = EventLoop::new().unwrap();
     let mut handler = Handler { plot_data: Some(plot_data), state: None };

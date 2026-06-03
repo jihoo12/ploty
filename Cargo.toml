@@ -9,3 +9,4 @@ winit = { version = "0.30", default-features = false, features = ["wayland", "wa
 glam = "0.28"
 bytemuck = { version = "1.16", features = ["derive"] }
 pollster = "0.3"
+glyphon = "0.11.0"

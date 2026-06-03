@@ -1,3 +1,10 @@
+/// 범례 항목 하나: 레이블 + 색상.
+#[derive(Debug, Clone)]
+pub struct LegendEntry {
+    pub label: String,
+    pub color: [f32; 3],
+}
+
 /// 렌더러 외형 설정.
 ///
 /// `PlotData::with_config()`로 주입하거나, 기본값(`Default`)을 그대로 사용합니다.
@@ -8,9 +15,6 @@
 ///     grid_divisions: 20,
 ///     ..Default::default()
 /// };
-/// let plot_data = PlotData::new()
-///     .with_config(config)
-///     .add_graph(my_mesh);
 /// ```
 #[derive(Debug, Clone)]
 pub struct PlotConfig {
@@ -20,6 +24,8 @@ pub struct PlotConfig {
     pub grid_divisions: usize,
     /// 배경색 RGBA (기본 거의 검정)
     pub background_color: [f64; 4],
+    /// 범례 항목 목록 (빈 벡터면 범례 숨김)
+    pub legend: Vec<LegendEntry>,
 }
 
 impl Default for PlotConfig {
@@ -28,6 +34,7 @@ impl Default for PlotConfig {
             grid_size: 10.0,
             grid_divisions: 10,
             background_color: [0.01, 0.01, 0.02, 1.0],
+            legend: vec![],
         }
     }
 }

@@ -11,8 +11,6 @@ const OPENGL_TO_WGPU: Mat4 = Mat4::from_cols_array(&[
 ]);
 
 /// 구면 좌표계 기반 궤도 카메라.
-///
-/// 마우스 드래그로 yaw/pitch 회전, 휠로 zoom(radius) 조절합니다.
 pub struct Camera {
     pub yaw: f32,
     pub pitch: f32,
@@ -39,7 +37,6 @@ impl Camera {
         Self::default()
     }
 
-    /// 마우스 좌클릭 상태 갱신.
     pub fn on_mouse_button(&mut self, pressed: bool) {
         self.is_dragging = pressed;
         if !pressed {
@@ -47,7 +44,6 @@ impl Camera {
         }
     }
 
-    /// 커서 이동: 드래그 중이면 yaw/pitch 회전.
     pub fn on_cursor_moved(&mut self, x: f64, y: f64) {
         if self.is_dragging {
             if let Some((lx, ly)) = self.last_pos {
@@ -58,12 +54,10 @@ impl Camera {
         self.last_pos = Some((x, y));
     }
 
-    /// 마우스 휠: 줌 조절.
     pub fn on_scroll(&mut self, dy: f32) {
         self.radius = (self.radius - dy).clamp(2.0, 50.0);
     }
 
-    /// 현재 상태에서 view-projection 행렬을 계산합니다.
     pub fn view_proj_matrix(&self, aspect: f32) -> Mat4 {
         let proj = Mat4::perspective_rh(PI / 4.0, aspect, 0.1, 100.0);
         let eye = Vec3::new(

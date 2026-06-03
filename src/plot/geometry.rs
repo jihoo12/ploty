@@ -19,7 +19,6 @@ pub fn create_full_grid_data(size: f32, divisions: usize) -> Mesh {
 
     for i in 0..=divisions {
         let d = start + i as f32 * step;
-        // XZ, XY, YZ 면에 각각 격자선
         add_line([d, start, start], [d, start, end]);
         add_line([start, start, d], [end, start, d]);
         add_line([d, start, start], [d, end, start]);
@@ -42,7 +41,6 @@ pub fn plot_wireframe(
     let rows = z_range.len();
     let cols = x_range.len();
 
-    // 1단계: 정점 생성 및 y 범위 수집
     let mut vertices = Vec::with_capacity(rows * cols);
     let (mut y_min, mut y_max) = (f32::MAX, f32::MIN);
 
@@ -53,12 +51,11 @@ pub fn plot_wireframe(
             y_max = y_max.max(y);
             vertices.push(Vertex {
                 position: [x, y, z, 1.0],
-                color: [0.0; 4], // 아직 미정
+                color: [0.0; 4],
             });
         }
     }
 
-    // 2단계: y 범위 기반 색상 정규화
     let denom = (y_max - y_min).max(f32::EPSILON);
     for v in &mut vertices {
         let intensity = 0.5 + 0.5 * (v.position[1] - y_min) / denom;
@@ -70,7 +67,6 @@ pub fn plot_wireframe(
         ];
     }
 
-    // 3단계: 수평 + 수직 엣지 인덱스
     let mut indices = Vec::with_capacity(rows * cols * 4);
     for r in 0..rows {
         for c in 0..(cols - 1) {
