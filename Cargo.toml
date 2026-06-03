@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 wgpu = "29.0"
-winit = "0.29"
+winit = { version = "0.30", default-features = false, features = ["wayland", "wayland-dlopen", "rwh_06"] }
 glam = "0.28"
 bytemuck = { version = "1.16", features = ["derive"] }
-pollster = "0.3" # 비동기 함수 실행을 위한 헬퍼 크레이트
+pollster = "0.3"

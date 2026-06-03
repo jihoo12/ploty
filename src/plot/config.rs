@@ -1,0 +1,33 @@
+/// 렌더러 외형 설정.
+///
+/// `PlotData::with_config()`로 주입하거나, 기본값(`Default`)을 그대로 사용합니다.
+///
+/// ```rust
+/// let config = PlotConfig {
+///     grid_size: 20.0,
+///     grid_divisions: 20,
+///     ..Default::default()
+/// };
+/// let plot_data = PlotData::new()
+///     .with_config(config)
+///     .add_graph(my_mesh);
+/// ```
+#[derive(Debug, Clone)]
+pub struct PlotConfig {
+    /// 격자 박스의 한 변 길이 (기본 10.0)
+    pub grid_size: f32,
+    /// 격자 분할 수 (기본 10)
+    pub grid_divisions: usize,
+    /// 배경색 RGBA (기본 거의 검정)
+    pub background_color: [f64; 4],
+}
+
+impl Default for PlotConfig {
+    fn default() -> Self {
+        Self {
+            grid_size: 10.0,
+            grid_divisions: 10,
+            background_color: [0.01, 0.01, 0.02, 1.0],
+        }
+    }
+}
