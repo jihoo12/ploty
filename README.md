@@ -2,8 +2,6 @@
 
 A hardware-accelerated 3D data visualization engine built with Rust and [wgpu](https://wgpu.rs). Render mathematical surfaces, animated wave functions, and scatter plots with a clean builder-style API — no boilerplate required.
 
-<img src="plot.webm" alt="Ploty screenshot">
-
 ---
 
 ## Features
