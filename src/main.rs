@@ -32,9 +32,10 @@ impl ApplicationHandler for Handler {
                 )
                 .unwrap(),
         );
-        let app = pollster::block_on(
-            plot::App::new(window.clone(), self.plot_data.take().unwrap()),
-        );
+        let app = pollster::block_on(plot::App::new(
+            window.clone(),
+            self.plot_data.take().unwrap(),
+        ));
         self.state = Some(State { window, app });
     }
 
@@ -44,14 +45,20 @@ impl ApplicationHandler for Handler {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
-        let Some(state) = self.state.as_mut() else { return };
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
         let app = &mut state.app;
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => app.resize(size),
 
-            WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } => {
                 app.camera.on_mouse_button(state == ElementState::Pressed);
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -85,40 +92,35 @@ fn main() {
         grid_size: 12.0,
         grid_divisions: 12,
         // 각 그래프에 대응하는 범례 항목
-        legend: vec![
-            plot::LegendEntry {
-                label: "sin(r)  — 정적".into(),
-                color: [0.2, 0.5, 1.0],
-            },
-            plot::LegendEntry {
-                label: "파동  — 애니메이션".into(),
-                color: [1.0, 0.45, 0.15],
-            },
-        ],
         ..Default::default()
     };
 
     let plot_data = plot::PlotData::new()
         .with_config(config)
         // 정적 그래프: sin(r)
-        .add_graph(plot::plot_wireframe(
-            &range,
-            &range,
-            |x, z| (x * x + z * z).sqrt().sin(),
-            [0.2, 0.5, 1.0],
-        ))
-        // 애니메이션 그래프: 바깥으로 퍼지는 파동
         .add_animated_graph(
             range.clone(),
             range.clone(),
             |x, z, t| {
                 let r = (x * x + z * z).sqrt();
-                (r - t * 2.5).sin() * (-r * 0.15).exp()
+                
+                // 1. 가우시안 패킷의 중심 폭을 결정 (값이 커질수록 넓게 퍼짐)
+                let width = 2.0; 
+                let gaussian = (- (r * r) / (2.0 * width * width)).exp();
+                
+                // 2. 내부에서 진동하는 파동 (t를 빼주어 중심에서 바깥으로 진행)
+                // 4.0은 파동의 주파수(촘촘함), 5.0은 파동이 퍼지는 속도입니다.
+                let wave = (4.0 * r - t * 5.0).cos();
+                
+                // 가우시안 엔벨로프와 파동을 곱해줍니다.
+                gaussian * wave
             },
-            [1.0, 0.45, 0.15],
+            [0.1, 0.8, 0.4], // 청록색/녹색 계열 레이블 컬러 예시
         );
-
     let event_loop = EventLoop::new().unwrap();
-    let mut handler = Handler { plot_data: Some(plot_data), state: None };
+    let mut handler = Handler {
+        plot_data: Some(plot_data),
+        state: None,
+    };
     event_loop.run_app(&mut handler).unwrap();
 }
