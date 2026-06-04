@@ -7,10 +7,10 @@ pub fn create_full_grid_data(size: f32, divisions: usize) -> Mesh {
     let start = -half;
     let end = half;
 
-    // 각 분할선마다 6개 선분(12 정점, 12 인덱스)
+    // 각 분할선(divisions + 1개)마다 면당 2선씩, 3면 → 6선. 선 하나 = 정점 2개.
     let line_count = (divisions + 1) * 6;
     let mut vertices: Vec<Vertex> = Vec::with_capacity(line_count * 2);
-    let mut indices: Vec<u32> = Vec::with_capacity(line_count * 2);
+    let mut indices: Vec<u32>    = Vec::with_capacity(line_count * 2);
 
     let color = [0.2, 0.2, 0.2];
     let mut add_line = |p1: [f32; 3], p2: [f32; 3]| {
@@ -65,11 +65,12 @@ pub fn plot_wireframe(
     }
 
     // 그라데이션 색상 적용
+    // `base_color`를 `cr/cg/cb`로 분해해 루프 변수 `r`(행 인덱스)과의 이름 충돌을 피합니다.
     let denom = (y_max - y_min).max(f32::EPSILON);
-    let [r, g, b] = base_color;
+    let [cr, cg, cb] = base_color;
     for v in &mut vertices {
         let t = 0.4 + 0.6 * (v.position[1] - y_min) / denom;
-        v.color = [r * t, g * t, b * t, 1.0];
+        v.color = [cr * t, cg * t, cb * t, 1.0];
     }
 
     // 인덱스: 행 방향 + 열 방향 선분

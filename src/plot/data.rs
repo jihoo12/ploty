@@ -5,9 +5,11 @@ pub type AnimFn = Box<dyn Fn(f32, f32, f32) -> f32 + Send + 'static>;
 
 /// CPU 측 애니메이션 그래프 정의.
 /// 매 프레임 `func(x, z, t)` 를 호출해 메시를 재생성합니다.
+///
+/// `x_range` / `z_range`는 읽기 전용이므로 `Box<[f32]>`로 저장합니다.
 pub struct AnimatedGraph {
-    pub x_range: Vec<f32>,
-    pub z_range: Vec<f32>,
+    pub x_range: Box<[f32]>,
+    pub z_range: Box<[f32]>,
     pub func: AnimFn,
     pub base_color: [f32; 3],
 }
@@ -50,14 +52,14 @@ impl PlotData {
     /// `t` 는 앱 시작 후 경과 시간(초)입니다.
     pub fn add_animated_graph(
         mut self,
-        x_range: Vec<f32>,
-        z_range: Vec<f32>,
+        x_range: impl Into<Box<[f32]>>,
+        z_range: impl Into<Box<[f32]>>,
         func: impl Fn(f32, f32, f32) -> f32 + Send + 'static,
         base_color: [f32; 3],
     ) -> Self {
         self.animated_graphs.push(AnimatedGraph {
-            x_range,
-            z_range,
+            x_range: x_range.into(),
+            z_range: z_range.into(),
             func: Box::new(func),
             base_color,
         });

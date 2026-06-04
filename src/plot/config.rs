@@ -22,8 +22,10 @@ pub struct PlotConfig {
     pub grid_size: f32,
     /// 격자 분할 수 (기본 10)
     pub grid_divisions: usize,
-    /// 배경색 RGBA (기본 거의 검정)
-    pub background_color: [f64; 4],
+    /// 배경색 RGBA — f32 [0, 1] 범위 (기본 거의 검정)
+    ///
+    /// wgpu의 `Color` 구조체는 f64를 사용하므로 렌더러 내부에서 변환합니다.
+    pub background_color: [f32; 4],
     /// 범례 항목 목록 (빈 벡터면 범례 숨김)
     pub legend: Vec<LegendEntry>,
 }

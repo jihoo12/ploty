@@ -124,6 +124,9 @@ pub struct App<'a> {
     // 애니메이션
     animated_graphs: Vec<AnimatedGraph>,
     animated_gpu: Vec<GpuMesh>,
+    /// 매 프레임 재사용되는 CPU-side 정점 스크래치 버퍼.
+    /// 각 항목은 해당 인덱스의 animated_graph에 대응합니다.
+    anim_scratch: Vec<Vec<Vertex>>,
     start_time: Instant,
 
     // 범례 (glyphon)
@@ -136,7 +139,8 @@ pub struct App<'a> {
     /// (GlyphBuffer, 색상) 쌍
     legend_buffers: Vec<(GlyphBuffer, [f32; 3])>,
 
-    background_color: [f64; 4],
+    /// 배경색 RGBA — f32 [0, 1] 범위.
+    background_color: [f32; 4],
 }
 
 impl<'a> App<'a> {
@@ -155,23 +159,34 @@ impl<'a> App<'a> {
                 ..Default::default()
             })
             .await
-            .expect("failed to find dgpu");
+            .expect("failed to find a GPU adapter");
         let info = adapter.get_info();
 
-        // 3. 백엔드 및 드라이버 정보 출력
-        println!("--- wgpu rederer info ---");
+        println!("--- wgpu renderer info ---");
         println!("adapter name (GPU): {}", info.name);
         println!("backend API: {:?}", info.backend); // Vulkan, Gl, Dx12, Metal 등
         println!("driver name: {}", info.driver);
-        println!("Driver Details: {}", info.driver_info);
-        println!("------------------------");
+        println!("driver details: {}", info.driver_info);
+        println!("--------------------------");
+
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())
             .await
             .unwrap();
 
         let caps = surface.get_capabilities(&adapter);
-        let format = caps.formats[0];
+
+        // sRGB 포맷을 우선 선택하고, 없으면 첫 번째 지원 포맷으로 폴백합니다.
+        // caps.formats가 비어 있으면 이 플랫폼에서는 렌더링 불가능합니다.
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or_else(|| {
+                *caps.formats.first().expect("no supported surface formats")
+            });
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -247,11 +262,12 @@ impl<'a> App<'a> {
         let grid_mesh = create_full_grid_data(plot_config.grid_size, plot_config.grid_divisions);
         let background_color = plot_config.background_color;
 
-        let grid = GpuMesh::upload(&device, &grid_mesh);
-        let graph = GpuMesh::upload(&device, &merge_meshes(data.graphs));
+        let grid    = GpuMesh::upload(&device, &grid_mesh);
+        let graph   = GpuMesh::upload(&device, &merge_meshes(data.graphs));
         let scatter = GpuMesh::upload(&device, &merge_meshes(data.scatters));
 
-        // ── 애니메이션 GPU 버퍼 초기 업로드 ─────────────────────────────────
+        // ── 애니메이션 GPU 버퍼 + 스크래치 버퍼 초기 업로드 ─────────────────
+        let mut anim_scratch: Vec<Vec<Vertex>> = Vec::with_capacity(data.animated_graphs.len());
         let animated_gpu: Vec<GpuMesh> = data
             .animated_graphs
             .iter()
@@ -262,6 +278,8 @@ impl<'a> App<'a> {
                     |x, z| (anim.func)(x, z, 0.0),
                     anim.base_color,
                 );
+                // 스크래치 버퍼를 정점 수에 맞게 미리 할당해 둡니다.
+                anim_scratch.push(mesh.vertices.clone());
                 GpuMesh::upload_dynamic(&device, &mesh)
             })
             .collect();
@@ -306,6 +324,7 @@ impl<'a> App<'a> {
             scatter,
             animated_graphs: data.animated_graphs,
             animated_gpu,
+            anim_scratch,
             start_time: Instant::now(),
             font_system,
             swash_cache,
@@ -441,17 +460,29 @@ impl<'a> App<'a> {
             bytemuck::cast_slice(&view_proj.to_cols_array()),
         );
 
+        // 애니메이션 그래프가 없으면 즉시 반환합니다.
+        if self.animated_graphs.is_empty() {
+            return;
+        }
+
         // 경과 시간 t를 한 번만 읽어 모든 애니메이션 그래프에 공유합니다.
         let t = self.start_time.elapsed().as_secs_f32();
-        for (anim, gpu) in self.animated_graphs.iter().zip(self.animated_gpu.iter()) {
-            let mesh = plot_wireframe(
+        for ((anim, gpu), scratch) in self
+            .animated_graphs
+            .iter()
+            .zip(self.animated_gpu.iter())
+            .zip(self.anim_scratch.iter_mut())
+        {
+            // 스크래치 버퍼를 재사용해 매 프레임 Vec 할당을 피합니다.
+            plot_wireframe_into(
+                scratch,
                 &anim.x_range,
                 &anim.z_range,
                 |x, z| (anim.func)(x, z, t),
                 anim.base_color,
             );
             self.queue
-                .write_buffer(&gpu.vertex_buf, 0, bytemuck::cast_slice(&mesh.vertices));
+                .write_buffer(&gpu.vertex_buf, 0, bytemuck::cast_slice(scratch));
         }
     }
 
@@ -460,7 +491,7 @@ impl<'a> App<'a> {
             wgpu::CurrentSurfaceTexture::Success(t) => t,
             wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             other => {
-                eprintln!("Surface texture error: {:?}", other);
+                eprintln!("surface texture error: {:?}", other);
                 return Ok(());
             }
         };
@@ -480,8 +511,8 @@ impl<'a> App<'a> {
 
         // 범례 TextArea: 우측 상단에 세로로 나열
         let padding = 16.0f32;
-        let row_h = 28.0f32;
-        let text_x = self.size.width as f32 - 220.0;
+        let row_h   = 28.0f32;
+        let text_x  = self.size.width as f32 - 220.0;
 
         let text_areas: Vec<TextArea> = self
             .legend_buffers
@@ -512,8 +543,7 @@ impl<'a> App<'a> {
                     &self.viewport,
                     text_areas,
                     &mut self.swash_cache,
-                )
-                .unwrap();
+                )?;
         }
 
         // ── 렌더 커맨드 ──────────────────────────────────────────────────────
@@ -522,7 +552,8 @@ impl<'a> App<'a> {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
 
         {
-            let [r, g, b, a] = self.background_color;
+            // f32 → f64 변환: wgpu Color 구조체는 f64를 사용합니다.
+            let [r, g, b, a] = self.background_color.map(f64::from);
             let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Main Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -555,7 +586,7 @@ impl<'a> App<'a> {
             self.draw_mesh(&mut rp, &self.grid);
             self.draw_mesh(&mut rp, &self.graph);
 
-            // 애니메이션 메시 — zip 덕분에 unsafe 없이 순회 가능
+            // 애니메이션 메시
             for gpu in &self.animated_gpu {
                 self.draw_mesh(&mut rp, gpu);
             }
@@ -569,8 +600,7 @@ impl<'a> App<'a> {
             // 범례 텍스트 오버레이 (같은 렌더패스 내)
             if !self.legend_buffers.is_empty() {
                 self.text_renderer
-                    .render(&self.text_atlas, &self.viewport, &mut rp)
-                    .unwrap();
+                    .render(&self.text_atlas, &self.viewport, &mut rp)?;
             }
         }
 
@@ -581,5 +611,47 @@ impl<'a> App<'a> {
         self.text_atlas.trim();
 
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 애니메이션 프레임 헬퍼 — 기존 Vec<Vertex>를 재사용해 할당을 피합니다.
+// ---------------------------------------------------------------------------
+
+/// `plot_wireframe`과 동일한 로직이지만, 결과를 `out`에 덮어씁니다.
+/// `out`의 길이는 `x_range.len() * z_range.len()`과 일치해야 합니다.
+fn plot_wireframe_into(
+    out: &mut Vec<Vertex>,
+    x_range: &[f32],
+    z_range: &[f32],
+    y_func: impl Fn(f32, f32) -> f32,
+    base_color: [f32; 3],
+) {
+    let rows = z_range.len();
+    let cols = x_range.len();
+    let expected = rows * cols;
+
+    out.clear();
+    out.reserve(expected);
+
+    let (mut y_min, mut y_max) = (f32::MAX, f32::MIN);
+
+    for &z in z_range {
+        for &x in x_range {
+            let y = y_func(x, z);
+            if y < y_min { y_min = y; }
+            if y > y_max { y_max = y; }
+            out.push(Vertex {
+                position: [x, y, z, 1.0],
+                color: [0.0; 4],
+            });
+        }
+    }
+
+    let denom = (y_max - y_min).max(f32::EPSILON);
+    let [cr, cg, cb] = base_color;
+    for v in out.iter_mut() {
+        let t = 0.4 + 0.6 * (v.position[1] - y_min) / denom;
+        v.color = [cr * t, cg * t, cb * t, 1.0];
     }
 }

@@ -16,10 +16,13 @@ const RADIUS_MIN: f32 =  2.0;
 const RADIUS_MAX: f32 = 50.0;
 
 /// 구면 좌표계 기반 궤도 카메라.
+///
+/// `yaw`, `pitch`, `radius`는 불변식(clamp 범위)을 보호하기 위해 비공개입니다.
+/// 직접 읽으려면 접근자 메서드를 사용하고, 직접 설정하려면 `set_*` 메서드를 사용하세요.
 pub struct Camera {
-    pub yaw: f32,
-    pub pitch: f32,
-    pub radius: f32,
+    yaw: f32,
+    pitch: f32,
+    radius: f32,
 
     is_dragging: bool,
     last_pos: Option<(f64, f64)>,
@@ -42,6 +45,28 @@ impl Camera {
         Self::default()
     }
 
+    // ── 읽기 접근자 ──────────────────────────────────────────────────────────
+
+    #[inline] pub fn yaw(&self)    -> f32 { self.yaw    }
+    #[inline] pub fn pitch(&self)  -> f32 { self.pitch  }
+    #[inline] pub fn radius(&self) -> f32 { self.radius }
+
+    // ── 쓰기 접근자 (불변식 보호) ────────────────────────────────────────────
+
+    pub fn set_yaw(&mut self, yaw: f32) {
+        self.yaw = yaw;
+    }
+
+    pub fn set_pitch(&mut self, pitch: f32) {
+        self.pitch = pitch.clamp(PITCH_MIN, PITCH_MAX);
+    }
+
+    pub fn set_radius(&mut self, radius: f32) {
+        self.radius = radius.clamp(RADIUS_MIN, RADIUS_MAX);
+    }
+
+    // ── 이벤트 핸들러 ────────────────────────────────────────────────────────
+
     pub fn on_mouse_button(&mut self, pressed: bool) {
         self.is_dragging = pressed;
         if !pressed {
@@ -53,15 +78,14 @@ impl Camera {
         if self.is_dragging {
             if let Some((lx, ly)) = self.last_pos {
                 self.yaw   += (x - lx) as f32 * 0.005;
-                self.pitch  = (self.pitch + (y - ly) as f32 * 0.005)
-                    .clamp(PITCH_MIN, PITCH_MAX);
+                self.set_pitch(self.pitch + (y - ly) as f32 * 0.005);
             }
         }
         self.last_pos = Some((x, y));
     }
 
     pub fn on_scroll(&mut self, dy: f32) {
-        self.radius = (self.radius - dy).clamp(RADIUS_MIN, RADIUS_MAX);
+        self.set_radius(self.radius - dy);
     }
 
     pub fn view_proj_matrix(&self, aspect: f32) -> Mat4 {
