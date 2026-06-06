@@ -1,4 +1,4 @@
-# Ploty — Lightweight 3D Plotting in Rust
+# wplot — Lightweight 3D Plotting in Rust
 
 A hardware-accelerated 3D data visualization engine built with Rust and [wgpu](https://wgpu.rs). Render mathematical surfaces, animated wave functions, and scatter plots with a clean builder-style API — no boilerplate required.
 
