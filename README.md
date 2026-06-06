@@ -22,7 +22,7 @@ A hardware-accelerated 3D data visualization engine built with Rust and [wgpu](h
 Requires the [Rust toolchain](https://rustup.rs).
 
 ```bash
-git clone https://github.com/jihoo12/wplot
+git clone https://github.com/wplot/wplot
 cd wplot
 cargo run --release
 ```
