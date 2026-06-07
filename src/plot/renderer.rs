@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use glam::Mat4;
+use glam::{Mat4, Vec3, Vec4};
 use glyphon::{
     Attrs, Buffer as GlyphBuffer, Cache as GlyphCache, Color as GlyphColor, Family, FontSystem,
     Metrics, Resolution, Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer,
@@ -141,6 +141,13 @@ pub struct App<'a> {
 
     /// 배경색 RGBA — f32 [0, 1] 범위.
     background_color: [f32; 4],
+
+    /// 직전 프레임의 뷰-프로젝션 행렬. render()에서 축 레이블 투영에 사용합니다.
+    view_proj: Mat4,
+
+    /// 축 눈금 레이블: (월드 좌표, GlyphBuffer) 쌍.
+    /// X/Y/Z 축 각각 grid_divisions + 1개씩 저장합니다.
+    axis_labels: Vec<(Vec3, GlyphBuffer)>,
 }
 
 impl<'a> App<'a> {
@@ -306,6 +313,11 @@ impl<'a> App<'a> {
         );
         let viewport = Viewport::new(&device, &glyph_cache);
         let legend_buffers = Self::build_legend_buffers(&plot_config.legend, &mut font_system);
+        let axis_labels = Self::build_axis_label_buffers(
+            plot_config.grid_size,
+            plot_config.grid_divisions,
+            &mut font_system,
+        );
 
         Self {
             camera: Camera::new(),
@@ -334,6 +346,8 @@ impl<'a> App<'a> {
             viewport,
             legend_buffers,
             background_color,
+            view_proj: Mat4::IDENTITY,
+            axis_labels,
         }
     }
 
@@ -360,7 +374,55 @@ impl<'a> App<'a> {
             .collect()
     }
 
-    // ── resize ────────────────────────────────────────────────────────────────
+    // ── 축 눈금 레이블 버퍼 생성 ──────────────────────────────────────────────
+
+    /// 격자 분할 눈금에 맞춰 X / Z / Y 축 레이블을 만듭니다.
+    ///
+    /// 반환값: `(월드 좌표, GlyphBuffer)` 벡터.
+    /// - X축: 바닥(y = −half), 앞면(z = −half) 모서리를 따라 배치
+    /// - Z축: 바닥(y = −half), 왼쪽(x = −half) 모서리를 따라 배치
+    /// - Y축: 왼쪽(x = −half), 뒷면(z = −half) 모서리를 따라 배치
+    fn build_axis_label_buffers(
+        grid_size: f32,
+        divisions: usize,
+        font_system: &mut FontSystem,
+    ) -> Vec<(Vec3, GlyphBuffer)> {
+        let half = grid_size / 2.0;
+        let step = grid_size / divisions as f32;
+
+        // 눈금 하나짜리 GlyphBuffer를 만드는 내부 헬퍼
+        let make_buf = |font_system: &mut FontSystem, text: &str| {
+            let mut buf = GlyphBuffer::new(font_system, Metrics::new(12.0, 16.0));
+            buf.set_size(font_system, Some(70.0), Some(20.0));
+            buf.set_text(
+                font_system,
+                text,
+                &Attrs::new().family(Family::Monospace),
+                Shaping::Basic,
+                None,
+            );
+            buf
+        };
+
+        let tick_count = divisions + 1;
+        let mut labels = Vec::with_capacity(tick_count * 3);
+
+        for i in 0..tick_count {
+            let v = -half + i as f32 * step;
+            let text = format_tick(v);
+
+            // X축: 바닥 앞쪽 모서리 (y = −half, z = −half)
+            labels.push((Vec3::new(v, -half, -half), make_buf(font_system, &text)));
+            // Z축: 바닥 왼쪽 모서리 (y = −half, x = −half)
+            labels.push((Vec3::new(-half, -half, v), make_buf(font_system, &text)));
+            // Y축: 왼쪽 뒤쪽 모서리 (x = −half, z = −half)
+            labels.push((Vec3::new(-half, v, -half), make_buf(font_system, &text)));
+        }
+
+        labels
+    }
+
+
 
     pub fn resize(&mut self, new_size: PhysicalSize<u32>) {
         if new_size.width == 0 || new_size.height == 0 {
@@ -454,6 +516,7 @@ impl<'a> App<'a> {
     pub fn update(&mut self) {
         let aspect = self.size.width as f32 / self.size.height as f32;
         let view_proj = self.camera.view_proj_matrix(aspect);
+        self.view_proj = view_proj;
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
@@ -514,7 +577,7 @@ impl<'a> App<'a> {
         let row_h   = 28.0f32;
         let text_x  = self.size.width as f32 - 220.0;
 
-        let text_areas: Vec<TextArea> = self
+        let legend_areas: Vec<TextArea> = self
             .legend_buffers
             .iter()
             .enumerate()
@@ -533,6 +596,42 @@ impl<'a> App<'a> {
             })
             .collect();
 
+        // 축 눈금 TextArea: 뷰-프로젝션으로 3D 월드 좌표 → 2D 화면 좌표로 투영
+        let w = self.size.width as f32;
+        let h = self.size.height as f32;
+        let axis_areas: Vec<TextArea> = self
+            .axis_labels
+            .iter()
+            .filter_map(|(pos, buf)| {
+                let clip = self.view_proj * Vec4::new(pos.x, pos.y, pos.z, 1.0);
+                // 카메라 뒤쪽이거나 NDC 범위 밖이면 건너뜁니다.
+                if clip.w <= 0.0 {
+                    return None;
+                }
+                let ndc = clip / clip.w;
+                if ndc.x < -1.1 || ndc.x > 1.1 || ndc.y < -1.1 || ndc.y > 1.1 {
+                    return None;
+                }
+                // NDC → 픽셀 좌표 (Y축 반전)
+                let sx = (ndc.x + 1.0) * 0.5 * w;
+                let sy = (1.0 - ndc.y) * 0.5 * h;
+                Some(TextArea {
+                    buffer: buf,
+                    left: sx,
+                    top: sy,
+                    scale: 1.0,
+                    bounds: TextBounds::default(),
+                    default_color: GlyphColor::rgb(140, 140, 155),
+                    custom_glyphs: &[],
+                })
+            })
+            .collect();
+
+        let text_areas: Vec<TextArea> = legend_areas
+            .into_iter()
+            .chain(axis_areas)
+            .collect();
+
         if !text_areas.is_empty() {
             self.text_renderer
                 .prepare(
@@ -541,7 +640,7 @@ impl<'a> App<'a> {
                     &mut self.font_system,
                     &mut self.text_atlas,
                     &self.viewport,
-                    text_areas,
+                    text_areas.clone(),
                     &mut self.swash_cache,
                 )?;
         }
@@ -597,8 +696,8 @@ impl<'a> App<'a> {
                 self.draw_mesh(&mut rp, &self.scatter);
             }
 
-            // 범례 텍스트 오버레이 (같은 렌더패스 내)
-            if !self.legend_buffers.is_empty() {
+            // 텍스트 오버레이 (범례 + 축 눈금) — 같은 렌더패스 내
+            if !text_areas.is_empty() {
                 self.text_renderer
                     .render(&self.text_atlas, &self.viewport, &mut rp)?;
             }
@@ -618,7 +717,21 @@ impl<'a> App<'a> {
 // 애니메이션 프레임 헬퍼 — 기존 Vec<Vertex>를 재사용해 할당을 피합니다.
 // ---------------------------------------------------------------------------
 
-/// `plot_wireframe`과 동일한 로직이지만, 결과를 `out`에 덮어씁니다.
+// ---------------------------------------------------------------------------
+// 눈금 값 포매터
+// ---------------------------------------------------------------------------
+
+/// 격자 눈금 값을 간결한 문자열로 변환합니다.
+///
+/// - 정수면 소수점 없이 출력 (`6` → `"6"`)
+/// - 소수점이 필요하면 한 자리까지 출력 (`6.5` → `"6.5"`)
+fn format_tick(v: f32) -> String {
+    if (v - v.round()).abs() < 1e-4 {
+        format!("{}", v as i32)
+    } else {
+        format!("{:.1}", v)
+    }
+}
 /// `out`의 길이는 `x_range.len() * z_range.len()`과 일치해야 합니다.
 fn plot_wireframe_into(
     out: &mut Vec<Vertex>,

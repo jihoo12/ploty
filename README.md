@@ -10,7 +10,8 @@ A hardware-accelerated 3D data visualization engine built with Rust and [wgpu](h
 - **Static surface plots** — wireframe meshes from any `f(x, z) → y` function
 - **Animated graphs** — time-varying surfaces driven by `f(x, z, t) → y` closures
 - **Scatter plots** — efficient point-cloud rendering via a dedicated point-list pipeline
-- **Orbit camera** — drag to rotate, scroll to zoom, fully interactive
+- **Orbit camera** — left-drag to rotate, middle-drag to pan, scroll to zoom, fully interactive
+- **Axis tick labels** — numeric labels on all three axes, projected from 3D world space each frame using glyphon
 - **Legend overlay** — per-graph labels rendered with GPU-accelerated text (glyphon)
 - **Depth-correct compositing** — grid, surfaces, and points layer correctly in 3D
 - **Builder API** — chain `.add_graph()`, `.add_animated_graph()`, and `.with_config()` to build a scene in a few lines
@@ -72,6 +73,7 @@ let plot_data = PlotData::new()
 | Input | Action |
 |---|---|
 | Left click + drag | Orbit (yaw & pitch) |
+| Middle click + drag | Pan (shift look-at target) |
 | Scroll wheel | Zoom in / out |
 | Window resize | Viewport and depth buffer update automatically |
 
@@ -81,9 +83,9 @@ let plot_data = PlotData::new()
 
 | File | Responsibility |
 |---|---|
-| `main.rs` | winit event loop, input routing |
-| `renderer.rs` | wgpu device, pipelines, render loop |
-| `camera.rs` | Spherical-coordinate orbit camera |
+| `main.rs` | winit event loop, input routing (left + middle mouse, scroll) |
+| `renderer.rs` | wgpu device, pipelines, render loop; axis tick label projection |
+| `camera.rs` | Spherical-coordinate orbit camera with pan support (`target: Vec3`) |
 | `geometry.rs` | Mesh generation: grid, wireframe, scatter |
 | `mesh.rs` | CPU-side vertex/index storage and merging |
 | `data.rs` | `PlotData` builder, animated graph definitions |

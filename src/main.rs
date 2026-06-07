@@ -61,6 +61,13 @@ impl ApplicationHandler for Handler {
             } => {
                 app.camera.on_mouse_button(state == ElementState::Pressed);
             }
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Middle,
+                ..
+            } => {
+                app.camera.on_middle_mouse_button(state == ElementState::Pressed);
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 app.camera.on_cursor_moved(position.x, position.y);
             }
