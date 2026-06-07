@@ -23,7 +23,7 @@ A hardware-accelerated 3D data visualization engine built with Rust and [wgpu](h
 Requires the [Rust toolchain](https://rustup.rs).
 
 ```bash
-git clone https://github.com/wplot/wplot
+git clone https://github.com/jihoo12/wplot
 cd wplot
 cargo run --release
 ```
@@ -44,6 +44,7 @@ let config = PlotConfig {
         LegendEntry { label: "sin(r)".into(),  color: [0.2, 0.5, 1.0] },
         LegendEntry { label: "wave".into(),     color: [1.0, 0.45, 0.15] },
     ],
+    .show_axis_labels: false,
     ..Default::default()
 };
 

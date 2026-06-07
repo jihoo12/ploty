@@ -28,6 +28,8 @@ pub struct PlotConfig {
     pub background_color: [f32; 4],
     /// 범례 항목 목록 (빈 벡터면 범례 숨김)
     pub legend: Vec<LegendEntry>,
+    /// 축 눈금 레이블 표시 여부 (기본 true)
+    pub show_axis_labels: bool,
 }
 
 impl Default for PlotConfig {
@@ -37,6 +39,7 @@ impl Default for PlotConfig {
             grid_divisions: 10,
             background_color: [0.01, 0.01, 0.02, 1.0],
             legend: vec![],
+            show_axis_labels: true,
         }
     }
 }

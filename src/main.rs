@@ -98,6 +98,7 @@ fn main() {
     let config = plot::PlotConfig {
         grid_size: 12.0,
         grid_divisions: 12,
+        show_axis_labels: false,
         ..Default::default()
     };
 

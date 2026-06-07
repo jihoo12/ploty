@@ -313,11 +313,15 @@ impl<'a> App<'a> {
         );
         let viewport = Viewport::new(&device, &glyph_cache);
         let legend_buffers = Self::build_legend_buffers(&plot_config.legend, &mut font_system);
-        let axis_labels = Self::build_axis_label_buffers(
-            plot_config.grid_size,
-            plot_config.grid_divisions,
-            &mut font_system,
-        );
+        let axis_labels = if plot_config.show_axis_labels {
+            Self::build_axis_label_buffers(
+                plot_config.grid_size,
+                plot_config.grid_divisions,
+                &mut font_system,
+            )
+        } else {
+            vec![]
+        };
 
         Self {
             camera: Camera::new(),
