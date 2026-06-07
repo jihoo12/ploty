@@ -64,6 +64,19 @@ let plot_data = PlotData::new()
             (r - t * 2.5).sin() * (-r * 0.15).exp()
         },
         [1.0, 0.45, 0.15],
+    )
+    // Static helix
+    .add_parametric_curve(
+        (0..=400).map(|i| i as f32 / 400.0 * 6.0 * PI).collect::<Vec<_>>(),
+        |u| [3.0 * u.cos(), u * 0.3, 3.0 * u.sin()],
+        [1.0, 0.4, 0.1],
+    )
+
+    // Animated Lissajous figure
+    .add_animated_parametric_curve(
+        (0..=300).map(|i| i as f32 / 300.0 * 2.0 * PI).collect::<Vec<_>>(),
+        |u, t| [3.0 * (2.0 * u + t).sin(), 3.0 * (3.0 * u).sin(), u.cos() * 2.0],
+        [0.9, 0.2, 0.8],
     );
 ```
 

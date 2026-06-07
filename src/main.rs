@@ -95,6 +95,16 @@ fn main() {
         .map(|i| -5.0 + (i as f32 / (n - 1) as f32) * 10.0)
         .collect();
 
+    // 나선 곡선: 400 샘플, u ∈ [0, 6π]
+    let helix_samples: Vec<f32> = (0..=400)
+        .map(|i| i as f32 / 400.0 * 6.0 * std::f32::consts::PI)
+        .collect();
+
+    // 매듭 곡선 (trefoil knot): 600 샘플, u ∈ [0, 2π]
+    let knot_samples: Vec<f32> = (0..=600)
+        .map(|i| i as f32 / 600.0 * 2.0 * std::f32::consts::PI)
+        .collect();
+
     let config = plot::PlotConfig {
         grid_size: 12.0,
         grid_divisions: 12,
@@ -104,18 +114,41 @@ fn main() {
 
     let plot_data = plot::PlotData::new()
         .with_config(config)
+        // 기존 애니메이션 물결 서피스
         .add_animated_graph(
             range.clone(),
             range.clone(),
             |x, z, t| {
                 let r = (x * x + z * z).sqrt();
-                let width = 2.0; 
-                let gaussian = (- (r * r) / (2.0 * width * width)).exp();
+                let width = 2.0;
+                let gaussian = (-(r * r) / (2.0 * width * width)).exp();
                 let wave = (4.0 * r - t * 5.0).cos();
                 gaussian * wave
             },
-            [0.1, 0.8, 0.4], 
+            [0.1, 0.8, 0.4],
+        )
+        // 정적 나선 곡선
+        .add_parametric_curve(
+            helix_samples,
+            |u| {
+                let r = 3.0;
+                [r * u.cos(), u * 0.3 - 3.0, r * u.sin()]
+            },
+            [1.0, 0.4, 0.1],
+        )
+        // 애니메이션 트레포일 매듭: 크기와 위상이 시간에 따라 변함
+        .add_animated_parametric_curve(
+            knot_samples,
+            |u, t| {
+                let scale = 2.5 + 0.5 * (t * 0.8).sin();
+                let x = scale * (u.sin() + 2.0 * (2.0 * u).sin());
+                let y = scale * 0.4 * (t * 0.5 + u).cos();
+                let z = scale * (u.cos() - 2.0 * (2.0 * u).cos());
+                [x, y, z]
+            },
+            [0.3, 0.6, 1.0],
         );
+
     let event_loop = EventLoop::new().unwrap();
     let mut handler = Handler {
         plot_data: Some(plot_data),

@@ -13,8 +13,8 @@ use winit::{dpi::PhysicalSize, window::Window};
 use super::{
     camera::Camera,
     config::LegendEntry,
-    data::{AnimatedGraph, PlotData},
-    geometry::{create_full_grid_data, plot_wireframe},
+    data::{AnimatedGraph, AnimatedParametricCurve, PlotData},
+    geometry::{create_full_grid_data, plot_parametric_curve, plot_wireframe},
     mesh::{Mesh, merge_meshes},
     vertex::Vertex,
 };
@@ -128,6 +128,15 @@ pub struct App<'a> {
     /// 각 항목은 해당 인덱스의 animated_graph에 대응합니다.
     anim_scratch: Vec<Vec<Vertex>>,
     start_time: Instant,
+
+    // 파라메트릭 곡선 (정적)
+    parametric_curves: GpuMesh,
+
+    // 애니메이션 파라메트릭 곡선
+    animated_parametric_curves: Vec<AnimatedParametricCurve>,
+    animated_curve_gpu: Vec<GpuMesh>,
+    /// 각 애니메이션 곡선의 정점 스크래치 버퍼
+    curve_scratch: Vec<Vec<Vertex>>,
 
     // 범례 (glyphon)
     font_system: FontSystem,
@@ -273,6 +282,14 @@ impl<'a> App<'a> {
         let graph   = GpuMesh::upload(&device, &merge_meshes(data.graphs));
         let scatter = GpuMesh::upload(&device, &merge_meshes(data.scatters));
 
+        // ── 정적 파라메트릭 곡선 업로드 ────────────────────────────────────────
+        let static_curve_meshes: Vec<Mesh> = data
+            .parametric_curves
+            .iter()
+            .map(|c| plot_parametric_curve(&c.u_range, |u| (c.func)(u), c.color))
+            .collect();
+        let parametric_curves = GpuMesh::upload(&device, &merge_meshes(static_curve_meshes));
+
         // ── 애니메이션 GPU 버퍼 + 스크래치 버퍼 초기 업로드 ─────────────────
         let mut anim_scratch: Vec<Vec<Vertex>> = Vec::with_capacity(data.animated_graphs.len());
         let animated_gpu: Vec<GpuMesh> = data
@@ -287,6 +304,18 @@ impl<'a> App<'a> {
                 );
                 // 스크래치 버퍼를 정점 수에 맞게 미리 할당해 둡니다.
                 anim_scratch.push(mesh.vertices.clone());
+                GpuMesh::upload_dynamic(&device, &mesh)
+            })
+            .collect();
+
+        // ── 애니메이션 파라메트릭 곡선 GPU 버퍼 + 스크래치 버퍼 ────────────────
+        let mut curve_scratch: Vec<Vec<Vertex>> = Vec::with_capacity(data.animated_parametric_curves.len());
+        let animated_curve_gpu: Vec<GpuMesh> = data
+            .animated_parametric_curves
+            .iter()
+            .map(|c| {
+                let mesh = plot_parametric_curve(&c.u_range, |u| (c.func)(u, 0.0), c.color);
+                curve_scratch.push(mesh.vertices.clone());
                 GpuMesh::upload_dynamic(&device, &mesh)
             })
             .collect();
@@ -342,6 +371,10 @@ impl<'a> App<'a> {
             animated_gpu,
             anim_scratch,
             start_time: Instant::now(),
+            parametric_curves,
+            animated_parametric_curves: data.animated_parametric_curves,
+            animated_curve_gpu,
+            curve_scratch,
             font_system,
             swash_cache,
             glyph_cache,
@@ -551,6 +584,22 @@ impl<'a> App<'a> {
             self.queue
                 .write_buffer(&gpu.vertex_buf, 0, bytemuck::cast_slice(scratch));
         }
+
+        // 애니메이션 파라메트릭 곡선 갱신
+        for ((curve, gpu), scratch) in self
+            .animated_parametric_curves
+            .iter()
+            .zip(self.animated_curve_gpu.iter())
+            .zip(self.curve_scratch.iter_mut())
+        {
+            scratch.clear();
+            for &u in curve.u_range.iter() {
+                let [x, y, z] = (curve.func)(u, t);
+                scratch.push(Vertex::new([x, y, z], curve.color));
+            }
+            self.queue
+                .write_buffer(&gpu.vertex_buf, 0, bytemuck::cast_slice(scratch));
+        }
     }
 
     pub fn render(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -688,9 +737,15 @@ impl<'a> App<'a> {
             rp.set_pipeline(&self.line_pipeline);
             self.draw_mesh(&mut rp, &self.grid);
             self.draw_mesh(&mut rp, &self.graph);
+            self.draw_mesh(&mut rp, &self.parametric_curves);
 
             // 애니메이션 메시
             for gpu in &self.animated_gpu {
+                self.draw_mesh(&mut rp, gpu);
+            }
+
+            // 애니메이션 파라메트릭 곡선
+            for gpu in &self.animated_curve_gpu {
                 self.draw_mesh(&mut rp, gpu);
             }
 

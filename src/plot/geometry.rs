@@ -105,3 +105,33 @@ pub fn plot_scatter(points: &[(f32, f32, f32)], color: [f32; 3]) -> Mesh {
     let indices: Vec<u32> = (0..points.len() as u32).collect();
     Mesh::new(vertices, indices)
 }
+
+/// 파라메트릭 곡선 `func(u) → [x, y, z]` 의 와이어프레임 메시를 생성합니다.
+///
+/// `u_range`의 연속 두 점이 하나의 선분을 이룹니다.
+/// 샘플이 1개 이하이면 빈 메시를 반환합니다.
+pub fn plot_parametric_curve(
+    u_range: &[f32],
+    func: impl Fn(f32) -> [f32; 3],
+    color: [f32; 3],
+) -> Mesh {
+    if u_range.len() < 2 {
+        return Mesh::new(vec![], vec![]);
+    }
+
+    let vertices: Vec<Vertex> = u_range
+        .iter()
+        .map(|&u| {
+            let [x, y, z] = func(u);
+            Vertex::new([x, y, z], color)
+        })
+        .collect();
+
+    // LineList: 각 연속 쌍(i, i+1)이 하나의 선분
+    let n = vertices.len() as u32;
+    let indices: Vec<u32> = (0..n - 1)
+        .flat_map(|i| [i, i + 1])
+        .collect();
+
+    Mesh::new(vertices, indices)
+}
