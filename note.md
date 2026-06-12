@@ -1,4 +1,4 @@
 for wsl
 ```sh
-cargo build --release --target x86_64-pc-windows-gnu
+cargo build --target x86_64-pc-windows-gnu
 ```
